@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * Poppies (poppiesusadev.wpengine.com) — post-plugin-update regression suite.
+ * Delizza — post-plugin-update regression suite.
  *
  * Run this after any plugin update on staging to catch:
  *   - unintended visual changes (layout, spacing, styling regressions)

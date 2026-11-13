@@ -1,12 +1,12 @@
 {
-  "name": "poppies-maintenance-regression",
+  "name": "delizza-maintenance-regression",
   "version": "1.0.0",
   "engines": {
     "node": "22.x"
   },
   "private": true,
   "type": "module",
-  "description": "Visual regression + contact form validation suite for poppiesusadev.wpengine.com — run after plugin updates.",
+  "description": "Visual regression for delizza — run after plugin updates.",
   "scripts": {
     "test": "playwright test",
     "test:update-baselines": "playwright test --update-snapshots",

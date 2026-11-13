@@ -11,7 +11,7 @@ on:
       site_url:
         description: 'SITE URL'
         required: false
-        default: 'https://poppies.us'
+        default: 'https://delizza.us'
 
 
 # Cancel superseded runs for the same branch/commit.
