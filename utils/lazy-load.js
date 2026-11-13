@@ -18,16 +18,9 @@ export async function triggerLazyImages(page) {
     window.scrollTo(0, 0);
   });
 
-  // 3. Wait for all <img> elements on the page to finish loading.
-  // Some images can be slow or broken; don't fail the whole visual test on that alone.
-  await page
-    .waitForFunction(
-      () => {
-        const images = Array.from(document.querySelectorAll('img'));
-        return images.every((img) => img.complete && img.naturalWidth > 0);
-      },
-      null,
-      { timeout: 15000 }
-    )
-    .catch(() => {});
+  // 3. Wait for all <img> elements on the page to finish loading
+  await page.waitForFunction(() => {
+    const images = Array.from(document.querySelectorAll('img'));
+    return images.every((img) => img.complete && img.naturalWidth > 0);
+  }, null, { timeout: 15000 });
 }

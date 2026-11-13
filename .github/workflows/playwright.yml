@@ -5,13 +5,13 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  
+
   workflow_dispatch:
     inputs:
       site_url:
         description: 'SITE URL'
         required: false
-        default: 'https://dev.delizza.us'
+        default: 'https://poppies.us'
 
 
 # Cancel superseded runs for the same branch/commit.

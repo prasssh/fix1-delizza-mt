@@ -39,14 +39,7 @@ export default defineConfig({
   },
 
   use: {
-    baseURL: process.env.BASE_URL || 'https://dev.delizza.us',
-    httpCredentials:
-      process.env.DEV_USERNAME && process.env.DEV_PASSWORD
-        ? {
-            username: process.env.DEV_USERNAME,
-            password: process.env.DEV_PASSWORD,
-          }
-        : undefined,
+    baseURL: process.env.BASE_URL || 'https://poppies.us',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
