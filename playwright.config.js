@@ -39,7 +39,7 @@ export default defineConfig({
   },
 
   use: {
-    baseURL: process.env.BASE_URL || 'https://poppies.us',
+    baseURL: process.env.BASE_URL || 'https://delizza.us',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
