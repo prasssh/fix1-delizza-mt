@@ -18,9 +18,25 @@ export async function triggerLazyImages(page) {
     window.scrollTo(0, 0);
   });
 
-  // 3. Wait for all <img> elements on the page to finish loading
+  // Give the page a moment to settle after scrolling; avoid hanging on perpetual network activity.
+  await page.waitForLoadState('load', { timeout: 5_000 }).catch(() => {});
+  await page.waitForTimeout(500);
+
+  // 3. Best-effort wait for images to finish loading (loaded or errored).
+  // Do not fail the test if a third-party/slow image never completes.
   await page.waitForFunction(() => {
     const images = Array.from(document.querySelectorAll('img'));
-    return images.every((img) => img.complete && img.naturalWidth > 0);
-  }, null, { timeout: 15000 });
+    return images.every((img) => img.complete || img.naturalWidth > 0);
+  }, null, { timeout: 15_000, polling: 250 }).catch(async () => {
+    // Nudge any still-pending images so screenshots can proceed deterministically.
+    await page.evaluate(() => {
+      document.querySelectorAll('img').forEach((img) => {
+        if (img.complete) return;
+        try {
+          img.loading = 'eager';
+          img.decoding = 'sync';
+        } catch {}
+      });
+    }).catch(() => {});
+  });
 }

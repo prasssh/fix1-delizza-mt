@@ -95,155 +95,163 @@ export async function pauseSliders(page) {
  * the top. Pin them into normal flow at the document top so they appear
  * exactly once, stuck to the top of the screenshot.
  *
- * It also hides dismissed cookie-consent leftovers, so nothing fixed
- * floats across the bottom of the page, and then scrolls back to the top
- * of the document so the full-page capture starts from a clean origin.
+ * It also hides cookie-consent leftovers and off-canvas overlays, so nothing
+ * fixed floats across the page, and then scrolls back to the top of the
+ * document so the full-page capture starts from a clean origin.
  *
  * @param {import('@playwright/test').Page} page
  */
 export async function stabilizePageForScreenshot(page) {
-  // Elementor only applies its sticky/fixed positioning once its frontend
-  // init has run and it has written inline styles — and for some pages only
-  // after the user scrolls. Scroll through the page once so any sticky
-  // header is activated before we sample positions.
+  // Some sticky/fixed headers and UI state are only applied after scroll.
+  // Scroll through the page once to activate them, then return to top.
   await page.evaluate(async () => {
     window.scrollTo(0, document.body.scrollHeight);
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 300));
     window.scrollTo(0, 0);
+    await new Promise((r) => setTimeout(r, 150));
   });
-
-  // Then poll until fixed/sticky elements have been tagged (or it becomes
-  // clear the page has none) before proceeding.
-  try {
-    await page.waitForFunction(() => {
-      for (const el of document.querySelectorAll('body *')) {
-        const cs = getComputedStyle(el);
-        if (cs.position === 'fixed' || cs.position === 'sticky') return true;
-      }
-      return false;
-    }, null, { timeout: 2000 });
-  } catch {
-    /* ok to proceed */
-  }
 
   await page.evaluate(() => {
-    // Locate everything that is currently fixed or sticky — computed style,
-    // so we catch both inline-style positioning (Elementor's sticky JS) and
-    // class-based positioning (`.elementor-sticky--active`).
-    const targets = [];
-    const hidden = [];
-
-    // Elementor's sticky JS inserts a header-sized `.elementor-sticky__spacer`
-    // clone to hold the header's place once it goes fixed. Since we pull the
-    // header back into normal flow, that spacer would double the header
-    // height (+~127px) on runs where the sticky JS initialised in time.
-    document.querySelectorAll('.elementor-sticky__spacer').forEach((el) => {
-      el.style.setProperty('display', 'none', 'important');
-    });
-
-    document.querySelectorAll('*').forEach((el) => {
-      if (el.classList.contains('elementor-sticky__spacer')) return;
-      const cs = getComputedStyle(el);
-      if (cs.position !== 'fixed' && cs.position !== 'sticky') return;
-      // Off-canvas menu/panel sections that are `visibility: hidden` (e.g.
-      // closed mobile nav) still occupy viewport-sized layout once they're
-      // pulled into normal flow — throw a false full-page region for the
-      // capture. Just display:none them.
-      if (cs.visibility === 'hidden') {
-        hidden.push(el);
-        return;
-      }
-      targets.push(el);
-    });
-
-    // Force-include the site's sticky header sections even if Elementor
-    // hasn't flipped them to fixed/sticky yet at sampling time. Converting
-    // a still-static header to `position: relative` is layout-neutral, and
-    // it guarantees the header always renders exactly once, in flow, in
-    // the capture — instead of the element (or not) being fixed/sticky
-    // depending on a timing race.
-    document
-      .querySelectorAll('.elementor-top-section, header, [id*="header"], .elementor-sticky')
-      .forEach((el) => {
-        if (el.classList.contains('elementor-sticky__spacer')) return;
-        const cs = getComputedStyle(el);
-        if (cs.visibility === 'hidden') return;
-        if (!targets.includes(el)) targets.push(el);
+    const cookieSelectors = [
+      '#cm', '#cm-ov', '#cc--main', '#s-cnt', '#cs', '#cs-ov',
+      '.cmplz-cookiebanner', '[id^="cmplz"]',
+      '#CybotCookiebotDialog', '#CybotCookiebotDialogBodyUnderlay',
+      '#onetrust-banner-sdk', '#onetrust-consent-sdk',
+      '[id*="cookie" i][class*="overlay" i]',
+    ];
+    for (const sel of cookieSelectors) {
+      document.querySelectorAll(sel).forEach((el) => {
+        el.style.setProperty('display', 'none', 'important');
+        el.style.setProperty('visibility', 'hidden', 'important');
       });
-
-    for (const el of hidden) {
-      el.style.setProperty('display', 'none', 'important');
     }
 
-    const beforeTargets = targets.map((t) => ({ st: t.style.position, cls: String(t.className||'').slice(0, 30) }));
-
-    // (a) Directly override with inline !important (beats class !important),
-    for (const el of targets) {
-      el.style.cssText = 'position: relative !important; top: auto !important; bottom: auto !important; left: auto !important; right: auto !important;';
-    }
-
-    const targetsCheck = [];
-    document.querySelectorAll('*').forEach((el) => {
-      const cs = getComputedStyle(el);
-      if (cs.position === 'fixed' || cs.position === 'sticky') {
-        targetsCheck.push(el);
-      }
+    // Remove Elementor sticky spacers so forcing header into flow doesn't
+    // double the header height.
+    document.querySelectorAll('.elementor-sticky__spacer').forEach((el) => {
+      el.remove();
     });
-    const stillFixed = targetsCheck.length;
 
-    console.log('STAB', JSON.stringify({ before: beforeTargets, hidden: hidden.length, after: targets.map((t) => t.style.position), stillFixed, stillFixedIds: targetsCheck.map(t => String(t.className||'').slice(0,40)) }));
-
-    // (b) Build a stylesheet keyed off the elements' current id/class so
-    // that later inline-style churn by Elementor's sticky handler still
-    // loses to this. Pulling the header back into normal flow makes it
-    // render exactly once, stuck to the very top of the capture.
-    const selectors = [
+    const headerSelectors = [
       'header',
+      '.site-header',
       '.elementor-top-section',
+      '.elementor-location-header',
+      '[data-elementor-type="header"]',
       '.elementor-sticky',
+      '.elementor-sticky--active',
       '[id*="header"]',
     ];
-    for (const el of targets) {
-      if (el.id) selectors.push(`#${CSS.escape(el.id)}`);
-      if (el.classList?.length) {
-        const classes = Array.from(el.classList).map((c) => `.${CSS.escape(c)}`).join('');
-        selectors.push(`${el.tagName.toLowerCase()}${classes}`);
+
+    const all = Array.from(document.querySelectorAll('body *'));
+    const fixedSticky = all.filter((el) => {
+      const cs = getComputedStyle(el);
+      return cs.position === 'fixed' || cs.position === 'sticky';
+    });
+
+    const isHeaderLike = (el) => headerSelectors.some((sel) => {
+      try { return el.matches(sel); } catch { return false; }
+    });
+
+    // Hide off-canvas/overlay fixed elements (menus, modals, backdrops) that
+    // are not part of the visible page flow. Keep header-like elements so we
+    // can pin them into normal flow at the top.
+    for (const el of fixedSticky) {
+      if (isHeaderLike(el)) continue;
+      const cs = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      const isHidden = cs.visibility === 'hidden' || cs.display === 'none' || parseFloat(cs.opacity || '1') === 0;
+      const isLargeOverlay = rect.width >= window.innerWidth * 0.8 && rect.height >= window.innerHeight * 0.8;
+      const isOffscreen = rect.bottom < 0 || rect.right < 0 || rect.top > window.innerHeight * 2 || rect.left > window.innerWidth * 2;
+      if (isHidden || isLargeOverlay || isOffscreen || rect.width === 0 || rect.height === 0) {
+        el.style.setProperty('display', 'none', 'important');
       }
     }
-    if (selectors.length) {
-      const style = document.createElement('style');
-      style.id = 'vr-stabilize';
-      style.textContent = selectors
-        .map((s) => `${s} { position: relative !important; top: auto !important; bottom: auto !important; }`)
-        .join('\n');
-      document.head.appendChild(style);
+
+    const headers = [];
+    for (const el of all) {
+      if (!isHeaderLike(el)) continue;
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+      headers.push(el);
     }
 
-    // Dismissed Complianz banners linger with transitions — hide them
-    // outright so they can't clip or overlay content in the capture.
-    const hideBanner = document.createElement('style');
-    hideBanner.id = 'vr-hide-cookie';
-    hideBanner.textContent = `.cmplz-cookiebanner, [id^="cmplz"], .elementor-sticky__spacer { display: none !important; }`;
-    document.head.appendChild(hideBanner);
+    // Pin header-like elements into normal flow at the top of the capture.
+    for (const el of headers) {
+      el.style.setProperty('position', 'relative', 'important');
+      el.style.setProperty('top', 'auto', 'important');
+      el.style.setProperty('bottom', 'auto', 'important');
+      el.style.setProperty('left', 'auto', 'important');
+      el.style.setProperty('right', 'auto', 'important');
+      el.style.setProperty('inset', 'auto', 'important');
+      el.style.setProperty('transform', 'none', 'important');
+      el.style.setProperty('margin-top', '0px', 'important');
+      el.style.setProperty('z-index', 'auto', 'important');
+    }
 
+    // If the page reserved space for a fixed header on body/html, remove it so
+    // the in-flow header doesn't create a duplicated gap at the top.
+    const root = document.documentElement;
+    const body = document.body;
+    [root, body].forEach((el) => {
+      el.style.setProperty('padding-top', '0px', 'important');
+      el.style.setProperty('scroll-padding-top', '0px', 'important');
+    });
+
+    // Disable smooth scrolling and ensure capture starts from the document top.
+    root.style.setProperty('scroll-behavior', 'auto', 'important');
+    if (body) body.style.setProperty('scroll-behavior', 'auto', 'important');
+
+    const style = document.createElement('style');
+    style.id = 'vr-stabilize';
+    style.textContent = `
+      html, body { scroll-behavior: auto !important; overflow-anchor: none !important; }
+      header, .site-header, .elementor-location-header, [data-elementor-type="header"], .elementor-sticky, .elementor-sticky--active, [id*="header"] {
+        position: relative !important;
+        top: auto !important;
+        bottom: auto !important;
+        left: auto !important;
+        right: auto !important;
+        inset: auto !important;
+        transform: none !important;
+      }
+      .elementor-sticky__spacer { display: none !important; height: 0 !important; }
+      #cm, #cm-ov, #cc--main, #s-cnt, #cs, #cs-ov,
+      .cmplz-cookiebanner, [id^="cmplz"],
+      #CybotCookiebotDialog, #CybotCookiebotDialogBodyUnderlay,
+      #onetrust-banner-sdk, #onetrust-consent-sdk { display: none !important; visibility: hidden !important; }
+    `;
+    document.head.appendChild(style);
+
+    // Force layout/reflow after style changes.
+    void document.body.offsetHeight;
     window.scrollTo(0, 0);
+    root.scrollTop = 0;
+    if (body) body.scrollTop = 0;
   });
 
-  // Fonts/consent/banners can finish swapping in after stabilization and
-  // shift the document height by a few hundred px over the next second or
-  // two — that's fatal to full-page screenshots. Wait for the document
-  // height to stop moving before the screenshot is taken.
+  // Wait for layout/images/fonts to settle so full-page stitching is stable.
+  await page.evaluate(() => {
+    window.__vrLastHeight = -1;
+    window.__vrStableCount = 0;
+  }).catch(() => {});
   await page.waitForFunction(() => {
-    if (!window.__vrLastHeight) window.__vrLastHeight = -1;
-    const h = document.documentElement.scrollHeight;
+    const h = Math.max(
+      document.body?.scrollHeight || 0,
+      document.documentElement?.scrollHeight || 0,
+    );
     if (h === window.__vrLastHeight) {
       window.__vrStableCount = (window.__vrStableCount || 0) + 1;
-      if (window.__vrStableCount >= 4) return true; // ~500ms of stability
+      if (window.__vrStableCount >= 6) return true; // ~750ms of stability
     } else {
       window.__vrStableCount = 0;
     }
     window.__vrLastHeight = h;
     return false;
   }, null, { timeout: 10_000, polling: 125 }).catch(() => {});
-  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    if (document.body) document.body.scrollTop = 0;
+  });
 }

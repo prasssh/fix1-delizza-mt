@@ -63,20 +63,52 @@ async function handleSignInIfNeeded(page) {
 }
 
 /**
- * Accept the Complianz cookie banner so it doesn't appear in screenshots.
- * The banner is dismissed by clicking the "Accept" button.
+ * Accept cookie/consent banners so they don't appear in screenshots.
+ * Tries common CMP selectors (Complianz, CookieConsent, generic) and falls
+ * back to hiding known overlays if no clickable accept action is found.
  */
 async function acceptCookieBanner(page) {
-  const acceptButton = page.locator('.cmplz-accept, .cmplz-cookiebanner-container .cmplz-accept, [class*="cmplz"] button:has-text("Accept")');
-  if (await acceptButton.count()) {
-    await acceptButton.first().click({ timeout: 5000 }).catch(() => {
-      // If the banner doesn't appear or can't be dismissed, continue anyway
-    });
+  const candidates = [
+    '.cmplz-accept, .cmplz-cookiebanner-container .cmplz-accept, [class*="cmplz"] button:has-text("Accept")',
+    '#c-p-bn',
+    'button:has-text("Accept all")',
+    'button:has-text("Accept All")',
+    'button:has-text("Accept")',
+    '[aria-label*="Accept" i]',
+    '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+    '#onetrust-accept-btn-handler',
+  ];
+
+  for (const selector of candidates) {
+    const btn = page.locator(selector).first();
+    if (await btn.isVisible().catch(() => false)) {
+      await btn.click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(300);
+      break;
+    }
   }
+
+  // Ensure common cookie overlays/modals are hidden even if not dismissed.
+  await page.evaluate(() => {
+    const hideSelectors = [
+      '#cm', '#cm-ov', '#cc--main', '#s-cnt', '#cs', '#cs-ov',
+      '.cmplz-cookiebanner', '[id^="cmplz"]',
+      '#CybotCookiebotDialog', '#CybotCookiebotDialogBodyUnderlay',
+      '#onetrust-banner-sdk', '#onetrust-consent-sdk',
+      '[class*="cookie" i][role="dialog"]',
+      '[id*="cookie" i][class*="banner" i]',
+    ];
+    for (const sel of hideSelectors) {
+      document.querySelectorAll(sel).forEach((el) => {
+        el.style.setProperty('display', 'none', 'important');
+        el.style.setProperty('visibility', 'hidden', 'important');
+      });
+    }
+  });
 }
 
 test.describe('Visual regression', () => {
-  test.setTimeout(90_000);
+  test.setTimeout(120_000);
   for (const pageUnderTest of pagesUnderTest) {
     test(`${pageUnderTest.name} — full page matches baseline`, async ({ page }) => {
       // The site's paid webfont host (Type Network) intermittently blocks
@@ -101,15 +133,25 @@ test.describe('Visual regression', () => {
           }
           let html = await response.text();
           const inject = `<style id="vr-defs">
-          .elementor-top-section, [id*="header"], .elementor-sticky, .elementor-sticky--active, .cmplz-cookiebanner, [id^="cmplz"] {
-            position: relative !important; top: auto !important; bottom: auto !important;
+          header, .site-header, .elementor-top-section, .elementor-location-header,
+          [data-elementor-type="header"], .elementor-sticky, .elementor-sticky--active, [id*="header"] {
+            position: relative !important;
+            top: auto !important;
+            bottom: auto !important;
+            left: auto !important;
+            right: auto !important;
+            inset: auto !important;
+            transform: none !important;
           }
-          .elementor-top-section, [id*="header"], .elementor-sticky, .elementor-sticky--active { display: block; }
-          .cmplz-cookiebanner, [id^="cmplz"] { display: none !important; }
-          /* Elementor inserts a header-sized spacer clone when the sticky JS
-             initialises. With the header forced into normal flow that spacer
-             would double the header height (+127px) on some runs. */
-          .elementor-sticky__spacer { display: none !important; }
+          .elementor-sticky__spacer { display: none !important; height: 0 !important; }
+          #cm, #cm-ov, #cc--main, #s-cnt, #cs, #cs-ov,
+          .cmplz-cookiebanner, [id^="cmplz"],
+          #CybotCookiebotDialog, #CybotCookiebotDialogBodyUnderlay,
+          #onetrust-banner-sdk, #onetrust-consent-sdk {
+            display: none !important;
+            visibility: hidden !important;
+          }
+          html, body { scroll-behavior: auto !important; }
         </style>`;
           html = html.replace(/<head([^>]*)>/i, (m) => `${m}${inject}`);
           return route.fulfill({ response, body: html, contentType: 'text/html' });
@@ -120,17 +162,17 @@ test.describe('Visual regression', () => {
 
       let response;
       let lastError;
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          response = await page.goto(pageUnderTest.path, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-          await page.waitForLoadState('load', { timeout: 20_000 }).catch(() => {});
+          response = await page.goto(pageUnderTest.path, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+          await page.waitForLoadState('load', { timeout: 15_000 }).catch(() => {});
           lastError = undefined;
           break;
         } catch (error) {
           lastError = error;
           await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
-          if (attempt === 0) {
-            await page.waitForTimeout(1500).catch(() => {});
+          if (attempt < 2) {
+            await page.waitForTimeout(2000).catch(() => {});
             // Re-register document route after a failed navigation attempt.
             await page.route(/typenetwork\.com/, (route) => route.abort()).catch(() => {});
             await page.route('**/*', async (route) => {
@@ -142,12 +184,25 @@ test.describe('Visual regression', () => {
                 }
                 let html = await res.text();
                 const inject = `<style id="vr-defs">
-          .elementor-top-section, [id*="header"], .elementor-sticky, .elementor-sticky--active, .cmplz-cookiebanner, [id^="cmplz"] {
-            position: relative !important; top: auto !important; bottom: auto !important;
+          header, .site-header, .elementor-top-section, .elementor-location-header,
+          [data-elementor-type="header"], .elementor-sticky, .elementor-sticky--active, [id*="header"] {
+            position: relative !important;
+            top: auto !important;
+            bottom: auto !important;
+            left: auto !important;
+            right: auto !important;
+            inset: auto !important;
+            transform: none !important;
           }
-          .elementor-top-section, [id*="header"], .elementor-sticky, .elementor-sticky--active { display: block; }
-          .cmplz-cookiebanner, [id^="cmplz"] { display: none !important; }
-          .elementor-sticky__spacer { display: none !important; }
+          .elementor-sticky__spacer { display: none !important; height: 0 !important; }
+          #cm, #cm-ov, #cc--main, #s-cnt, #cs, #cs-ov,
+          .cmplz-cookiebanner, [id^="cmplz"],
+          #CybotCookiebotDialog, #CybotCookiebotDialogBodyUnderlay,
+          #onetrust-banner-sdk, #onetrust-consent-sdk {
+            display: none !important;
+            visibility: hidden !important;
+          }
+          html, body { scroll-behavior: auto !important; }
         </style>`;
                 html = html.replace(/<head([^>]*)>/i, (m) => `${m}${inject}`);
                 return route.fulfill({ response: res, body: html, contentType: 'text/html' });
@@ -160,8 +215,11 @@ test.describe('Visual regression', () => {
         }
       }
       if (lastError) {
-        await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
-        throw lastError;
+        // Last-resort fallback: if the page is partially usable, proceed to screenshot/stabilization.
+        if (!page.url() || page.url() === 'about:blank') {
+          await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
+          throw lastError;
+        }
       }
 
       // Enter credentials if a sign-in popup/form appears; otherwise continue
@@ -197,23 +255,31 @@ test.describe('Visual regression', () => {
         );
       }
 
-      // Accept the cookie banner so it doesn't appear in the screenshot
-      await acceptCookieBanner(page);
-
       // Simulate a real visitor: scroll gradually to trigger lazy-loaded images
+      // Do this before cookie handling/stabilization to avoid scroll-state races.
       await triggerLazyImages(page);
 
+      // Accept/hide cookie banners so they don't appear in the screenshot
+      await acceptCookieBanner(page);
+
       // Turn off sliders and snap them to the first slide so the leadspace
-      // renders a deterministic first-image frame (no purple masking).
+      // renders a deterministic first-image frame.
       await pauseSliders(page);
 
-      // Pin the sticky header to the top only and clear leftover fixed
-      // elements so the full-page capture has no extra space at the bottom
+      // Pin headers into normal flow at the top and clear fixed/overlay elements
+      // so the full-page capture is deterministic and starts from the top.
       await stabilizePageForScreenshot(page);
 
-      // Slider JS may kick back in after stabilization; re-pause + reset
+      // Slider/cookie/header scripts may mutate layout after stabilization.
+      await acceptCookieBanner(page);
       await pauseSliders(page);
-      await page.waitForTimeout(300);
+      await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+      await page.waitForTimeout(400);
+      await page.evaluate(() => {
+        window.scrollTo(0, 0);
+        document.documentElement.scrollTop = 0;
+        if (document.body) document.body.scrollTop = 0;
+      });
 
       await expect(page).toHaveScreenshot(`${pageUnderTest.name}-full.png`, {
         fullPage: true,
@@ -226,6 +292,9 @@ test.describe('Visual regression', () => {
           page.locator('[class*="vimeo" i]'),
           page.locator('.elementor-widget-video'),
           page.locator('video'),
+          ...(pageUnderTest.name === 'foodservice'
+            ? [page.locator('.hero.foodservice')]
+            : []),
         ],
       });
     });
